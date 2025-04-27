@@ -1,42 +1,59 @@
+use core::f64;
 use std::vec;
 
-use rand::{thread_rng, Rng};
-use nalgebra::{DMatrix, DVector, Matrix1x2, Matrix4x2, Vector2};
+use nalgebra::{DVector, Matrix1x2, Matrix2, Matrix2x1, Matrix4x2};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 
 #[derive(Debug, PartialEq, Clone)]
 struct Perceptron {
-    weight: Matrix1x2<f64>,
+    weight: Matrix2x1<f64>,
     bias: f64,
+}
+struct Perceptron_hiden {
+    weight: Matrix2<f64>,
+    bias: Matrix2x1<f64>,
 }
 
 impl Perceptron {
-    /// Create a neuron with random weights and bias to break symmetry
-    fn new_random() -> Self {
-        let mut rng = thread_rng();
-        let w1 = rng.gen_range(-1.0..1.0);
-        let w2 = rng.gen_range(-1.0..1.0);
-        let b = rng.gen_range(-1.0..1.0);
-        Perceptron { weight: Matrix1x2::new(w1, w2), bias: b }
+    fn new_random(rng: &mut StdRng) -> Self {
+        let w1 = rng.random_range(-1.0..1.0);
+        let w2 = rng.random_range(-1.0..1.0);
+        let b = rng.random_range(-1.0..1.0);
+        Perceptron {
+            weight: Matrix2x1::new(w1, w2),
+            bias: b,
+        }
     }
 }
 
 struct Layer {
-    hidden_l: [Perceptron; 2],
+    hidden_l: Perceptron_hiden,
     output_l: Perceptron,
 }
 
 impl Layer {
-
     fn new() -> Self {
-        Self {
-            hidden_l: [Perceptron::new_random(), Perceptron::new_random()],
-            output_l: Perceptron::new_random(),
+        let mut rng = StdRng::seed_from_u64(42); // fixed seed for reproducibility
+        let out = Perceptron::new_random(&mut rng);
+        let hidden_layer = Perceptron_hiden {
+            weight: Matrix2::from_row_slice(&[
+                rng.random_range(-1.0..1.0),
+                rng.random_range(-1.0..1.0),
+                rng.random_range(-1.0..1.0),
+                rng.random_range(-1.0..1.0),
+            ]),
+            bias: Matrix2x1::new(rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0)),
+        };
+
+        Layer {
+            hidden_l: hidden_layer,
+            output_l: out,
         }
     }
 
-
-    fn sigmoid(x: f64) -> f64 { 1.0 / (1.0 + (-x).exp()) }
-
+    fn sigmoid(x: f64) -> f64 {
+        1.0 / (1.0 + (-x).exp())
+    }
 
     fn loss(&self, ans: f64, pred: f64) -> f64 {
         let eps = 1e-10;
@@ -44,79 +61,59 @@ impl Layer {
         -(ans * p.ln() + (1.0 - ans) * (1.0 - p).ln())
     }
 
-
-    pub fn forward_train(&mut self,
-                         input: &Matrix4x2<i32>,
-                         answers: &DVector<i32>,
-                         learning_rate: f64) {
-        for epoch in 0..1000 {
+    pub fn forward_train(
+        &mut self,
+        input: &Matrix4x2<i32>,
+        answers: &DVector<i32>,
+        learning_rate: f64,
+    ) {
+        for _epoch in 0..20000 {
             for i in 0..input.nrows() {
                 // Forward pass
-                let row = input.row(i);
-                let x = Vector2::new(row[0] as f64, row[1] as f64);
+                let x: Matrix2x1<f64> = nalgebra::convert(input.row(i).transpose().into_owned());
 
-                let mut hidden_out = Vector2::zeros();
-                for (j, neuron) in self.hidden_l.iter().enumerate() {
-                    let z = neuron.weight.dot(&x.transpose()) + neuron.bias;
-                    hidden_out[j] = Self::sigmoid(z);
-                }
-                let z_o = self.output_l.weight.dot(&hidden_out.transpose()) + self.output_l.bias;
-                let y_pred = Self::sigmoid(z_o);
+                let output_hidden = self.hidden_l.weight.transpose() * x + self.hidden_l.bias;
+
+                let out_h_sig = output_hidden.map(Self::sigmoid);
+
+                let y_pred = Self::sigmoid(
+                    (self.output_l.weight.transpose() * out_h_sig)[(0, 0)] + self.output_l.bias,
+                );
                 let y_true = answers[i] as f64;
+                let _loss = self.loss(y_true, y_pred);
 
-                if epoch % 500 == 0 && i == 0 {
-                    println!("Epoch {}: loss = {:.6}", epoch, self.loss(y_true, y_pred));
+                let out_error = y_pred - y_true;
+
+                self.output_l.weight -= learning_rate * out_error * out_h_sig;
+                self.output_l.bias -= learning_rate * out_error;
+
+                let mut dever_out = Matrix1x2::new(0.0, 0.0);
+                for i in out_h_sig.iter().enumerate() {
+                    dever_out[i.0] = out_h_sig[i.0] * (1.0 - out_h_sig[i.0]);
                 }
 
-
-                let output_error = y_pred - y_true;
-
-                let old_w_o = self.output_l.weight;
-
-
-                let mut hidden_error = Vector2::zeros();
-                for j in 0..self.hidden_l.len() {
-                    let dh = hidden_out[j] * (1.0 - hidden_out[j]);
-                    hidden_error[j] = old_w_o[j] * output_error * dh;
-                }
-
-
-                self.output_l.weight -= learning_rate * output_error * hidden_out.transpose();
-                self.output_l.bias -= learning_rate * output_error;
-
-
-                for j in 0..self.hidden_l.len() {
-                    self.hidden_l[j].weight -= learning_rate * hidden_error[j] * x.transpose();
-                    self.hidden_l[j].bias -= learning_rate * hidden_error[j];
-                }
+                self.hidden_l.weight -=
+                    learning_rate * out_error * self.output_l.weight * dever_out * y_true;
             }
         }
     }
 
- 
-    pub fn predict(&self, x_i: Vector2<i32>) -> f64 {
-        let x = x_i.map(|f| f as f64);
-        let mut hidden_out = Vector2::zeros();
-        for (j, neuron) in self.hidden_l.iter().enumerate() {
-            let z = neuron.weight.dot(&x.transpose()) + neuron.bias;
-            hidden_out[j] = Self::sigmoid(z);
-        }
-        let z_o = self.output_l.weight.dot(&hidden_out.transpose()) + self.output_l.bias;
-        Self::sigmoid(z_o)
+    pub fn predict(&self, x: Matrix2x1<f64>) -> f64 {
+        let output_hidden = self.hidden_l.weight.transpose() * x + self.hidden_l.bias;
+        let out = output_hidden.map(Self::sigmoid);
+        Self::sigmoid((self.output_l.weight.transpose() * out)[(0, 0)] + self.output_l.bias)
     }
 }
-
 pub fn main() {
     let inp = Matrix4x2::from_row_slice(&[0, 0, 0, 1, 1, 0, 1, 1]);
     let ans = DVector::from_vec(vec![0, 1, 1, 0]);
 
     let mut layer = Layer::new();
-    layer.forward_train(&inp, &ans, 0.1);
+    layer.forward_train(&inp, &ans, 0.01);
 
     for &(a, b) in &[(0, 0), (0, 1), (1, 0), (1, 1)] {
-        let prob = layer.predict(Vector2::new(a, b));
+        let prob = layer.predict(Matrix2x1::from_row_slice(&[a as f64, b as f64]));
         let class = if prob > 0.5 { 1 } else { 0 };
         println!("Input ({}, {}) => prob: {:.4},  {}", a, b, prob, class);
     }
 }
-

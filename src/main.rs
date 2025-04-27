@@ -1,6 +1,5 @@
-use std::result;
-
 use core::f64;
+use std::result;
 mod mlp;
 use nalgebra::{DVector, Matrix1x2, Matrix4x2};
 // 1 row 2 coln
